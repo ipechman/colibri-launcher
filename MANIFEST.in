@@ -1,0 +1,7 @@
+include LICENSE NOTICE THIRD_PARTY_NOTICES.md README.md CONTRIBUTING.md
+recursive-include colibri_launcher *.py *.svg
+recursive-include packaging *.py *.spec *.md *.txt *.json .gitattributes
+recursive-include assets *.ico
+recursive-include docs *.md
+recursive-include tests *.py
+include tests/launcher/fixtures/coli

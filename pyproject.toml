@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "colibri-launcher"
+version = "0.1.0"
+description = "An unofficial Windows desktop launcher for an existing Colibri installation"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+dependencies = ["PySide6==6.11.2"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Win32 (MS Windows)",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.optional-dependencies]
+build = ["pyinstaller>=6,<7", "build>=1,<2"]
+
+[project.gui-scripts]
+colibri-launcher = "colibri_launcher.app:main"
+
+[project.urls]
+Repository = "https://github.com/ipechman/colibri-launcher"
+Issues = "https://github.com/ipechman/colibri-launcher/issues"
+Colibri = "https://github.com/JustVugg/colibri"
+
+[tool.setuptools.packages.find]
+include = ["colibri_launcher*"]
+
+[tool.setuptools.package-data]
+colibri_launcher = ["icons/*.svg"]

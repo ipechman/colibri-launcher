@@ -1,0 +1,24 @@
+colibri
+Copyright 2026 Vincenzo Fornaro
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+Third-party components bundled with this software and their licenses
+are listed in THIRD_PARTY_NOTICES.md.
+
+Colibri Launcher for Windows is maintained independently by ipechman.
+Its launcher code originated in the unmerged desktop-launcher contribution
+to JustVugg/colibri, revision 6d81978d187e253ff21ada8e3884c19b689ba287.
+The Colibri application icon is retained from that Apache-2.0 project.
+The standalone package layout, Windows-only adaptation, and build workflow
+are changes made for this independent project. No Colibri engine is bundled.
