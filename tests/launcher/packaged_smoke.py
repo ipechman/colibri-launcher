@@ -90,7 +90,8 @@ def main():
     assert not (binary.parent / "_internal" / "colibri").exists(), "Old package namespace was bundled"
     assert not any((binary.parent / name).exists() for name in ("c", ".upstream", "models"))
     with tempfile.TemporaryDirectory(prefix="colibri-packaged-smoke-") as directory:
-        scratch = Path(directory)
+        # Windows runners can spell TEMP using an 8.3 alias; the app saves resolved paths.
+        scratch = Path(directory).resolve()
         working_directory = scratch / "unrelated-working-directory"
         working_directory.mkdir()
         env = dict(os.environ)
