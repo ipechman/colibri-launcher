@@ -6,11 +6,95 @@ imports from the launcher package and print exactly one bounded JSON object.
 """
 
 import argparse
+import contextlib
+import io
 import inspect
 import json
 import runpy
 import sys
 from pathlib import Path
+
+
+class _ParserCaptured(BaseException):
+    """Abort before the installed CLI can dispatch a command handler."""
+
+
+def _capture_cli(namespace, launcher):
+    result = {"schema_version": 1, "commands": {}}
+    original_parse = argparse.ArgumentParser.parse_args
+    original_known = argparse.ArgumentParser.parse_known_args
+    original_argv = sys.argv
+    captured = []
+
+    def capture(parser, *_args, **_kwargs):
+        captured.append(parser)
+        raise _ParserCaptured()
+
+    try:
+        main = namespace.get("main")
+        if not callable(main):
+            raise ValueError("this Colibri CLI does not expose its command parser")
+        argparse.ArgumentParser.parse_args = capture
+        argparse.ArgumentParser.parse_known_args = capture
+        # --help also prevents dispatch if a future main handles it without argparse.
+        sys.argv = [str(launcher), "--help"]
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            try:
+                main()
+            except _ParserCaptured:
+                pass
+        if len(captured) != 1:
+            raise ValueError("this Colibri CLI did not expose an argparse command parser")
+        root = captured[0]
+        if root._mutually_exclusive_groups or any(
+                action.required and not isinstance(action, argparse._SubParsersAction)
+                for action in root._actions):
+            raise ValueError("the installed CLI requires unsupported global argument constraints")
+        commands = {}
+        for action in root._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                commands.update(action.choices)
+        if not commands or len(commands) > 128:
+            raise ValueError("the installed command parser has an unsupported command list")
+        for name, parser in commands.items():
+            if name in {"doctor", "web", "serve"} and parser._mutually_exclusive_groups:
+                raise ValueError(f"Colibri {name} has unsupported mutually exclusive argument groups")
+            if len(parser._actions) > 256:
+                raise ValueError("the installed command parser has too many arguments")
+            options, positionals = {}, []
+            for action in parser._actions:
+                if isinstance(action, argparse._SubParsersAction):
+                    positionals.append({"name": action.dest, "nargs": action.nargs,
+                                        "required": action.required})
+                    continue
+                if not action.option_strings:
+                    positionals.append({"name": action.dest, "nargs": action.nargs,
+                                        "required": action.nargs not in ("?", "*")})
+                    continue
+                choices = None
+                if action.choices is not None:
+                    if not hasattr(action.choices, "__len__") or len(action.choices) > 256:
+                        raise ValueError("the installed command parser has unsupported choices")
+                    choices = list(action.choices)
+                    if any(not isinstance(item, (str, int, float, bool, type(None))) for item in choices):
+                        raise ValueError("the installed command parser has non-scalar choices")
+                for option in action.option_strings:
+                    options[option] = {"nargs": action.nargs, "required": action.required,
+                                       "choices": choices, "aliases": list(action.option_strings),
+                                       "type": "int" if action.type is int else
+                                               "float" if action.type is float else "str"}
+            result["commands"][name] = {"options": options, "positionals": positionals}
+        if len(json.dumps(result, allow_nan=False).encode("utf-8")) > 196_608:
+            raise ValueError("the installed command parser is too large")
+    except (Exception, SystemExit) as error:
+        # This bridge is a process boundary: expose failures, never guess support.
+        result = {"schema_version": 1, "commands": {},
+                  "error": (str(error) or type(error).__name__)[:2000]}
+    finally:
+        argparse.ArgumentParser.parse_args = original_parse
+        argparse.ArgumentParser.parse_known_args = original_known
+        sys.argv = original_argv
+    return result
 
 
 def _nvidia_devices():
@@ -50,7 +134,28 @@ def _nvidia_runtime(engine, family_id):
         built = b"[DSV4 CUDA]" in image
         runtime_names = ("coli_cuda_dsv4_dg.dll", "coli_cuda_dsv4.dll")
     else:
-        built = b"[CUDA] mode: routed experts" in image and b"coli_cuda.dll" in image
+        try:
+            import doctor
+        except ModuleNotFoundError as error:
+            if error.name != "doctor":
+                return False, f"The installed CUDA classifier could not be loaded: {error}."
+            classifier = None
+        else:
+            classifier = getattr(doctor, "windows_backend_dll", None)
+        if classifier is not None:
+            if not callable(classifier):
+                return False, "The installed CUDA classifier is unsupported."
+            try:
+                expected = classifier(image)
+            except Exception as error:
+                return False, f"The installed CUDA classifier failed: {error}."
+            if expected == "coli_hip.dll":
+                return False, "The selected engine uses AMD HIP, which this launcher does not support."
+            if expected not in (None, "coli_cuda.dll"):
+                return False, "The installed CUDA classifier returned an unsupported backend."
+            built = expected == "coli_cuda.dll"
+        else:
+            built = b"[CUDA] mode: routed experts" in image and b"coli_cuda.dll" in image
         runtime_names = ("coli_cuda.dll",)
     if not built:
         return False, "The selected engine has no verified NVIDIA CUDA support."
@@ -126,6 +231,7 @@ def collect(support_dir, launcher, model):
     model_path = Path(model).resolve()
     sys.path.insert(0, str(support))
     namespace = runpy.run_path(str(launcher_path), run_name="_colibri_desktop_probe")
+    cli = _capture_cli(namespace, launcher_path)
     try:
         import family_registry
         resolve_model = family_registry.resolve_model
@@ -154,10 +260,6 @@ def collect(support_dir, launcher, model):
         cuda_binary = False
         cuda_reason = f"{name} does not support an accelerator in this Colibri installation."
     gateway = getattr(descriptor, "has_gateway_adapter", False) is True
-    try:
-        launcher_text = launcher_path.read_text(encoding="utf-8", errors="ignore")[:2_000_000]
-    except OSError:
-        launcher_text = ""
     return {
         "schema_version": 1,
         "family": descriptor.id,
@@ -176,7 +278,7 @@ def collect(support_dir, launcher, model):
         "cuda_reason": cuda_reason,
         "gpus": _nvidia_devices(),
         "resource_env": _resource_environment(descriptor),
-        "auto_tier": "--auto-tier" in launcher_text,
+        "cli": cli,
     }
 
 

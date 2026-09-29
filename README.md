@@ -26,6 +26,7 @@ download models, or change GPU drivers.
 - Start/Stop, readiness checks, loading status, logs, and a copyable command.
 - Light and dark themes, including readable controls and dialogs.
 - Automatic local Colibri/Python discovery and an optional Python picker.
+- Commands and argument support discovered from your installed Colibri.
 
 Models stay on disk when removed from the library. Closing a running launcher
 offers to stop its model process tree. The app always opens with inference stopped.
@@ -55,8 +56,11 @@ Tests use simulated servers and models; they do not start real inference.
 
 This repository contains the launcher, its tests, and Windows packaging. It does
 not contain Colibri's engine, model weights, Tauri application, or repository history.
-Colibri v1.11.0 is the initial integration target. The adapter uses Colibri's model
-registry and diagnostics; compatibility with a newer release must be verified.
+Compatibility is tested against Colibri **v1.11.0 and v1.12.1**. The launcher reads
+the installed CLI's argument definitions and model registry instead of selecting
+flags by version number. Unsupported settings are explained before launch.
+Future changes to diagnostic schemas, engine behavior, or registry interfaces
+can still require a launcher update; discovery cannot guarantee all future releases.
 
 The original upstream proposal included roughly 3,000 lines of launcher Python,
 3,000 lines of tests and fixtures, and 13,500 lines of third-party notices. Required

@@ -82,11 +82,27 @@ Existing users keep saved models, options, their Python choice, and theme.
 Invalid settings are preserved with a `.corrupt-...` suffix before defaults are
 restored. The app never resumes inference automatically at startup.
 
-Colibri v1.11.0 is the initial integration target. Model support comes from the
-installed Colibri registry, with compatible JSON diagnostics. Unsupported or
-changed CLI schemas are reported instead of guessing launch arguments. Ordinary
+Colibri v1.11.0 and v1.12.1 are tested compatibility targets. Model support comes
+from the installed Colibri registry, with compatible JSON diagnostics. Ordinary
 Colibri diagnostics may update `.coli_analysis.json` in a model folder; they do
 not load its tensor payloads or start inference.
+
+The launcher discovers commands, flags, argument counts, required arguments, and
+choices from the installed CLI's argument parser during each readiness check.
+The isolated metadata probe stops parser inspection before a command is dispatched.
+The version number is informational, not a list of permitted releases.
+
+Web Chat or API Server is disabled when the installed CLI does not provide it.
+Optional settings that are unsupported stay at Automatic. An existing explicit
+value is preserved and remains editable so you can reset it to Automatic;
+incompatible values block Start instead of being silently ignored. Flags required
+for model selection, compute control, local binding, and diagnostics must exist.
+Automatic resource placement is requested only when that command supports it.
+
+New commands and flags do not automatically become additional GUI controls. The
+interface keeps its focused launch workflow. A future CLI that replaces its parser,
+registry, diagnostic schema, or GPU behavior may still need a launcher update;
+capability discovery does not establish compatibility with unknown semantics.
 
 ## Troubleshooting
 

@@ -14,11 +14,11 @@ py -3.12 -m venv .venv
 
 Most tests are self-contained. CLI contract tests use a separate upstream
 checkout and report a skip when it is not configured. CI runs them against
-Colibri v1.11.0 at the immutable revision below:
+Colibri v1.11.0 and v1.12.1 at immutable revisions. To check v1.12.1 locally:
 
 ```powershell
 git clone https://github.com/JustVugg/colibri.git .upstream
-git -C .upstream checkout 3a70acbf6e7054f6edcf4b7d3b1e679793eb8e48
+git -C .upstream checkout ce370e87d7b623d7759b52ec2007d75fc5b0e87e
 $env:COLIBRI_TEST_ROOT = (Resolve-Path .upstream).Path
 .\.venv\Scripts\python.exe -m unittest discover -s tests/launcher -v
 ```
@@ -26,6 +26,10 @@ $env:COLIBRI_TEST_ROOT = (Resolve-Path .upstream).Path
 The upstream checkout is ignored by Git and never enters the launcher wheel or
 ZIP. Tests read CLI functions without executing an inference engine. Process
 tests use a small local fixture server.
+For the legacy target, check out `3a70acbf6e7054f6edcf4b7d3b1e679793eb8e48`
+instead. The Windows CI matrix runs the full suite and extracted ZIP smoke test
+against both releases. Contract tests inspect the real parser and diagnostic JSON,
+including command-specific flag support and the newer Kimi CUDA predicate.
 
 ## Run from source
 
@@ -55,7 +59,7 @@ record the source revision.
 Extract into a fresh directory and check that exact extracted application:
 
 ```powershell
-Expand-Archive dist\ColibriLauncher-0.1.0-Windows-x64.zip build\archive-check
+Expand-Archive dist\ColibriLauncher-0.2.0-Windows-x64.zip build\archive-check
 .\.venv\Scripts\python.exe tests/launcher/packaged_smoke.py build/archive-check/ColibriLauncher/ColibriLauncher.exe .upstream
 ```
 

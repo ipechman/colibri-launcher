@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Mapping
 
+from .capabilities import command_errors, supports_option, validate_cli
 from .domain import (
     Check,
     GpuDevice,
@@ -122,8 +123,9 @@ def _probe_metadata(installation: Installation, model_path: Path) -> dict[str, A
     if limits["default_context"] > limits["max_context"]:
         raise LauncherError("Colibri returned invalid context limits.")
     if not all(isinstance(payload.get(key), bool)
-               for key in ("gateway", "family_accelerator", "cuda_binary", "auto_tier")):
+               for key in ("gateway", "family_accelerator", "cuda_binary")):
         raise LauncherError("Colibri returned invalid capability metadata.")
+    validate_cli(payload.get("cli"))
     resource_env = payload.get("resource_env")
     if (not isinstance(resource_env, list) or len(resource_env) > 32 or
             any(not isinstance(name, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", name)
@@ -181,6 +183,35 @@ def _diagnostic_environment(compute: str, metadata: dict[str, Any],
     return _launch_environment(None, compute, gpu_ids, metadata["family"], tuple(metadata["resource_env"]))
 
 
+def _resource_arguments(options: LaunchOptions) -> list[tuple[str, str | None]]:
+    return [(flag, str(value)) for flag, value in
+            (("--ram", options.ram_gb), ("--ctx", options.context), ("--vram", options.vram_gb))
+            if value]
+
+
+def _doctor_arguments(model_path: Path, options: LaunchOptions, gpu: str):
+    return [("--json", None), ("--model", str(model_path)), ("--gpu", gpu),
+            *_resource_arguments(options)]
+
+
+def _launch_arguments(model: ModelInfo, options: LaunchOptions, gpu: str, cli):
+    arguments = [("--model", str(model.path)), ("--host", "127.0.0.1"),
+                 ("--port", str(options.port)), ("--model-id", model.model_id), ("--gpu", gpu)]
+    if options.mode == "web":
+        arguments.append(("--no-browser", None))
+    arguments.extend(_resource_arguments(options))
+    if options.max_tokens:
+        arguments.append(("--ngen", str(options.max_tokens)))
+    if supports_option(cli, options.mode, "--auto-tier", takes_value=False):
+        arguments.append(("--auto-tier", None))
+    return arguments
+
+
+def _flatten_arguments(arguments):
+    return [item for flag, value in arguments for item in
+            ((flag,) if value is None else (flag, value))]
+
+
 def _run_doctor(
     installation: Installation,
     model_path: Path,
@@ -188,16 +219,15 @@ def _run_doctor(
     gpu_value: str,
     metadata: dict[str, Any],
 ) -> dict[str, Any]:
-    argv: list[str | os.PathLike[str]] = [
-        installation.python, installation.launcher, "doctor", "--json",
-        "--model", model_path, "--gpu", gpu_value,
-    ]
-    if options.ram_gb:
-        argv.extend(("--ram", str(options.ram_gb)))
-    if options.context:
-        argv.extend(("--ctx", str(options.context)))
-    if options.vram_gb:
-        argv.extend(("--vram", str(options.vram_gb)))
+    arguments = _doctor_arguments(model_path, options, gpu_value)
+    errors = command_errors(metadata["cli"], "doctor", arguments)
+    if errors:
+        # Automatic may reach a CPU fallback with different --gpu choices.
+        # Keep that incompatibility in preflight and never execute the command.
+        return {"status": "error", "plan": {}, "checks": [
+            {"id": "launcher.cli", "status": "fail", "summary": message} for message in errors
+        ]}
+    argv = [installation.python, installation.launcher, "doctor", *_flatten_arguments(arguments)]
     gpu_ids = (() if gpu_value in {"none", "auto"} else
                tuple(int(value) for value in gpu_value.split(",")))
     try:
@@ -283,6 +313,22 @@ def inspect_model(
         gpu_ids = gpu_ids or tuple(sorted(known_ids))
     gpu_value = ",".join(str(value) for value in gpu_ids) or "auto"
 
+    cli = metadata["cli"]
+    plan = {"backend": "cpu", "cuda_capable": cuda_capable,
+            "auto_tier": supports_option(cli, options.mode, "--auto-tier", takes_value=False),
+            "max_output": limits["max_output"], "resource_env": tuple(metadata["resource_env"]),
+            "cli": cli}
+    planned_gpu = (gpu_value if options.compute == "cuda" or
+                   options.compute == "auto" and cuda_configured else "none")
+    compatibility_errors = [
+        *command_errors(cli, "doctor", _doctor_arguments(path, options, planned_gpu)),
+        *command_errors(cli, options.mode, _launch_arguments(model, options, planned_gpu, cli)),
+    ]
+    if compatibility_errors:
+        extra.extend(Check("launcher.cli", "fail", message)
+                     for message in dict.fromkeys(compatibility_errors))
+        return Preflight(model, tuple(extra), gpus, False, cuda_reason, plan)
+
     if not metadata["gateway"]:
         extra.append(Check("launcher.gateway", "fail",
                            "This model family is not available through Colibri's local server."))
@@ -333,14 +379,10 @@ def inspect_model(
             extra.append(Check("launcher.compute", "warn",
                                f"Automatic selected CPU because NVIDIA CUDA was not verified: {cuda_reason}"))
 
-    plan = dict(report.get("plan") or {})
-    plan.update({
-        "backend": backend,
-        "cuda_capable": cuda_capable,
-        "auto_tier": metadata["auto_tier"],
-        "max_output": limits["max_output"],
-        "resource_env": tuple(metadata["resource_env"]),
-    })
+    actual_gpu = "none" if backend == "cpu" else gpu_value
+    extra.extend(Check("launcher.cli", "fail", message) for message in
+                 command_errors(cli, options.mode, _launch_arguments(model, options, actual_gpu, cli)))
+    plan = {**dict(report.get("plan") or {}), **plan, "backend": backend}
     return Preflight(model, (*_checks(report), *extra), gpus, cuda_verified,
                      cuda_reason, plan)
 
@@ -409,24 +451,14 @@ def build_launch(
         if result.model.family in _SINGLE_GPU_ENV:
             gpu_ids = gpu_ids or tuple(sorted(known_ids))
 
+    gpu_value = "none" if backend == "cpu" else (",".join(str(value) for value in gpu_ids) or "auto")
+    cli = result.plan.get("cli")
+    arguments = _launch_arguments(result.model, options, gpu_value, cli)
+    errors = command_errors(cli, options.mode, arguments)
+    if errors:
+        raise LauncherError("\n".join(errors))
     argv = [str(installation.python), str(installation.launcher), options.mode,
-            "--model", str(result.model.path),
-            "--host", "127.0.0.1", "--port", str(options.port),
-            "--model-id", result.model.model_id,
-            "--gpu", "none" if backend == "cpu" else
-            (",".join(str(value) for value in gpu_ids) or "auto")]
-    if options.mode == "web":
-        argv.append("--no-browser")
-    if options.ram_gb:
-        argv.extend(("--ram", str(options.ram_gb)))
-    if options.vram_gb:
-        argv.extend(("--vram", str(options.vram_gb)))
-    if options.context:
-        argv.extend(("--ctx", str(options.context)))
-    if options.max_tokens:
-        argv.extend(("--ngen", str(options.max_tokens)))
-    if result.plan.get("auto_tier") is True:
-        argv.append("--auto-tier")
+            *_flatten_arguments(arguments)]
     environment = _launch_environment(environ, backend, gpu_ids, result.model.family,
                                       tuple(result.plan.get("resource_env", ())))
     return LaunchSpec(tuple(argv), environment, installation.support_dir, options.port,

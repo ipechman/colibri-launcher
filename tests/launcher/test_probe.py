@@ -2,9 +2,36 @@
 
 import tempfile
 import unittest
+import types
+from unittest.mock import patch
 from pathlib import Path
 
-from colibri_launcher.probe import _cuda_support
+from colibri_launcher.probe import _cuda_support, _nvidia_runtime
+
+
+class InstalledBackendProbeTests(unittest.TestCase):
+    def test_installed_backend_classifier_recognizes_kimi_without_glm_banner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = Path(tmp) / "kimi.exe"
+            engine.write_bytes(b"[K3 CUDA] runtime\0coli_cuda.dll")
+            (engine.parent / "coli_cuda.dll").write_bytes(b"runtime")
+            doctor = types.SimpleNamespace(windows_backend_dll=lambda image: "coli_cuda.dll")
+            with patch.dict("sys.modules", {"doctor": doctor}):
+                supported, reason = _nvidia_runtime(engine, "kimi")
+            self.assertTrue(supported, reason)
+
+    def test_installed_backend_classifier_cannot_promote_hip_or_missing_dll(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = Path(tmp) / "kimi.exe"
+            engine.write_bytes(b"[K3 CUDA] runtime")
+            for expected, message in (("coli_hip.dll", "AMD HIP"),
+                                      ("coli_cuda.dll", "missing"),
+                                      ("unexpected.dll", "unsupported")):
+                doctor = types.SimpleNamespace(windows_backend_dll=lambda image: expected)
+                with self.subTest(expected=expected), patch.dict("sys.modules", {"doctor": doctor}):
+                    supported, reason = _nvidia_runtime(engine, "kimi")
+                    self.assertFalse(supported)
+                    self.assertIn(message, reason)
 
 
 class LegacyCudaProbeTests(unittest.TestCase):

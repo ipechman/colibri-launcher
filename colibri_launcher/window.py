@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 from .backend import build_launch, command_preview, inspect_model
+from .capabilities import supports_option
 from .domain import LauncherError, LaunchOptions, Preflight, ProcessEvent
 from .installation import find_installation
 from .settings import load_settings, save_settings
@@ -58,6 +59,7 @@ class LauncherWindow(QMainWindow):
         self._installation_generation = 0
         self._python_edit_pending = False
         self._preflight: Preflight | None = None
+        self._cli_capabilities: dict | None = None
         self._preflight_key: tuple[str, LaunchOptions] | None = None
         self._pending_start = False
         self._launch_in_progress = False
@@ -433,6 +435,8 @@ class LauncherWindow(QMainWindow):
         self._installation_generation += 1
         self._installation = None
         self._preflight = None
+        self._cli_capabilities = None
+        self._apply_cli_controls()
         self._preflight_key = None
         self._pending_start = False
         self._preflight_timer.stop()
@@ -599,6 +603,7 @@ class LauncherWindow(QMainWindow):
         finally:
             self._updating_options = False
         self._update_gpu_control_enabled()
+        self._apply_cli_controls()
 
     @staticmethod
     def _gpu_ids_from_data(value: Any) -> tuple[int, ...]:
@@ -631,6 +636,32 @@ class LauncherWindow(QMainWindow):
 
     def _update_gpu_control_enabled(self) -> None:
         self.gpu_combo.setEnabled(not self._launch_in_progress and self.compute_combo.currentData() != "cpu")
+
+    def _apply_cli_controls(self) -> None:
+        cli = self._cli_capabilities
+        mode = str(self.mode_combo.currentData())
+        for index in range(self.mode_combo.count()):
+            item = self.mode_combo.model().item(index)
+            supported = cli is None or self.mode_combo.itemData(index) in cli.get("commands", {})
+            item.setEnabled(supported)
+            item.setToolTip("" if supported else "This app is not supported by the installed Colibri.")
+        for widget, flag, diagnostic in (
+            (self.ram_spin, "--ram", True), (self.vram_spin, "--vram", True),
+            (self.context_spin, "--ctx", True), (self.max_tokens_spin, "--ngen", False),
+        ):
+            supported = cli is None or (supports_option(cli, mode, flag) and
+                                       (not diagnostic or supports_option(cli, "doctor", flag)))
+            # Keep saved explicit values editable so users can reset to Automatic.
+            widget.setEnabled(self.mode_combo.isEnabled() and (supported or widget.value() != 0))
+            hint = ""
+            if not supported:
+                hint = "This setting is not supported by the installed Colibri. Set Automatic to continue."
+            elif self._preflight is not None:
+                if widget is self.context_spin:
+                    hint = f"Automatic uses {self._preflight.model.default_context:,} tokens"
+                elif widget is self.max_tokens_spin:
+                    hint = f"Automatic uses {self._preflight.model.default_output:,} tokens"
+            widget.setToolTip(hint)
 
     def _options(self) -> LaunchOptions:
         return LaunchOptions(
@@ -665,6 +696,7 @@ class LauncherWindow(QMainWindow):
         self.rename_model_button.setEnabled(has_model)
         self.remove_model_button.setEnabled(has_model)
         self._update_gpu_control_enabled()
+        self._apply_cli_controls()
 
     def _invalidate_pending_launch(self) -> None:
         if not self._launch_in_progress or self._supervisor is not None:
@@ -691,6 +723,7 @@ class LauncherWindow(QMainWindow):
             return
         entry["options"] = dataclasses.asdict(self._options())
         self._save()
+        self._apply_cli_controls()
         self._preflight = None
         self._preflight_key = None
         self.start_button.setEnabled(False)
@@ -739,6 +772,7 @@ class LauncherWindow(QMainWindow):
         ):
             return
         self._preflight = result
+        self._cli_capabilities = result.plan.get("cli")
         self._preflight_key = (path, options)
         self._updating_options = True
         try:
@@ -752,6 +786,7 @@ class LauncherWindow(QMainWindow):
             self.max_tokens_spin.setToolTip(f"Automatic uses {result.model.default_output:,} tokens")
         finally:
             self._updating_options = False
+        self._apply_cli_controls()
         cuda_index = self.compute_combo.findData("cuda")
         cuda_item = self.compute_combo.model().item(cuda_index)
         # Let users choose CUDA before correcting a GPU selection (for example,

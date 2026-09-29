@@ -160,15 +160,16 @@ class InstallationTests(unittest.TestCase):
 
     def test_frozen_build_launch_to_supervisor_removes_python_contamination(self):
         import socket
-        from colibri_launcher.backend import build_launch
+        from colibri_launcher.backend import build_launch, inspect_model
         from colibri_launcher.domain import Installation, LaunchOptions, ModelInfo, Preflight
+        from colibri_launcher.installation import find_installation
         from colibri_launcher.supervisor import Supervisor
 
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)
-            installation = Installation(folder, folder / "coli", PYTHON, folder)
-            model = ModelInfo(folder, "Fixture", "fixture", "fixture-model", folder / "engine", 4096, 8192, 2048)
-            preflight = Preflight(model, (), (), False, "CPU", {"backend": "cpu"})
+            installation = find_installation(make_release(folder), PYTHON)
+            preflight = inspect_model(installation, make_model(folder),
+                                      LaunchOptions(mode="serve", compute="cpu"))
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))
                 port = sock.getsockname()[1]

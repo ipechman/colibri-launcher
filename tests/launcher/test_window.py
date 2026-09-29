@@ -165,6 +165,66 @@ class LauncherWindowTests(unittest.TestCase):
         self.assertEqual(window.status_label.text(), "Idle")
         self.assertGreater(window.add_model_button.accessibleName().strip(), "")
 
+    def _install_cli_preflight(self, window, *, web=True, vram=False):
+        def command(flags):
+            return {"options": {flag: {"nargs": None, "required": False, "choices": None}
+                                for flag in flags}, "positionals": []}
+
+        flags = ["--model", "--host", "--port", "--model-id", "--gpu", "--ram", "--ctx", "--ngen"]
+        if vram:
+            flags.append("--vram")
+        commands = {"serve": command(flags), "doctor": command(flags)}
+        if web:
+            commands["web"] = command(flags)
+        self.preflight.plan["cli"] = {"schema_version": 1, "commands": commands}
+        window._preflight_ready(str(self.model_dir), window._options(), self.installation,
+                                window._installation_generation, self.preflight)
+
+    def test_missing_cli_mode_is_disabled_without_changing_saved_choice(self):
+        window = self.make_window()
+        self.add_model(window)
+        window.mode_combo.setCurrentIndex(window.mode_combo.findData("web"))
+        self._install_cli_preflight(window, web=False)
+
+        self.assertFalse(window.mode_combo.model().item(window.mode_combo.findData("web")).isEnabled())
+        self.assertTrue(window.mode_combo.model().item(window.mode_combo.findData("serve")).isEnabled())
+        self.assertEqual(window.mode_combo.currentData(), "web")
+
+    def test_unsupported_automatic_setting_stays_disabled_after_stop(self):
+        window = self.make_window()
+        self.add_model(window)
+        self._install_cli_preflight(window)
+
+        self.assertFalse(window.vram_spin.isEnabled())
+        self.assertIn("not supported", window.vram_spin.toolTip().lower())
+        window._finish_launch_operation()
+        self.assertFalse(window.vram_spin.isEnabled())
+        self.assertTrue(window.ram_spin.isEnabled())
+
+    def test_unsupported_saved_setting_can_be_reset_without_losing_its_value(self):
+        window = self.make_window()
+        self.add_model(window)
+        window.vram_spin.setValue(6.0)
+        self._install_cli_preflight(window)
+
+        self.assertEqual(window.vram_spin.value(), 6.0)
+        self.assertTrue(window.vram_spin.isEnabled())
+        self.assertIn("Automatic", window.vram_spin.toolTip())
+        window.vram_spin.setValue(0)
+        self.assertFalse(window.vram_spin.isEnabled())
+        self.assertEqual(window._selected_entry()["options"]["vram_gb"], 0)
+
+    def test_refreshed_cli_capabilities_restore_supported_controls(self):
+        window = self.make_window()
+        self.add_model(window)
+        self._install_cli_preflight(window, web=False)
+        self.assertFalse(window.vram_spin.isEnabled())
+
+        self._install_cli_preflight(window, web=True, vram=True)
+        self.assertTrue(window.vram_spin.isEnabled())
+        self.assertTrue(window.mode_combo.model().item(window.mode_combo.findData("web")).isEnabled())
+        self.assertNotIn("not supported", window.vram_spin.toolTip().lower())
+
     def test_saved_installation_is_ignored_in_favor_of_local_colibri(self):
         from tests.launcher.test_adapter import make_release
         from colibri_launcher.installation import find_installation as real_find_installation

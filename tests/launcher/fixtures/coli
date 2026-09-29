@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import argparse
 import os
 import sys
 from pathlib import Path
@@ -40,6 +41,7 @@ def _argument(name, default=None):
 
 
 def _doctor():
+    (_support_dir() / "doctor-called").touch()
     model = Path(_argument("--model", ""))
     config = json.loads((model / "config.json").read_text(encoding="utf-8"))
     if config.get("doctor_schema") == "bad":
@@ -105,15 +107,37 @@ def _runtime_settings(family):
 
 
 def main():
-    if "--version" in sys.argv:
-        print("colibri 9.9.9")
-        return 0
-    if "--help" in sys.argv or len(sys.argv) == 1:
-        print("usage: coli [--auto-tier] {doctor,web,serve}")
-        return 0
-    if "doctor" in sys.argv:
+    config_path = _support_dir() / "fixture_cli.json"
+    config = json.loads(config_path.read_text()) if config_path.is_file() else {}
+    parser = argparse.ArgumentParser(description="Fixture; --auto-tier may be unavailable")
+    parser.add_argument("--version", action="version", version="colibri 9.9.9")
+    commands = parser.add_subparsers(dest="command")
+    for name in config.get("commands", ("doctor", "web", "serve")):
+        command = commands.add_parser(name)
+        options = {
+            "--model": {}, "--ram": {"type": int}, "--ctx": {"type": int},
+            "--gpu": {}, "--vram": {"type": float}, "--ngen": {"type": int},
+            "--auto-tier": {"action": "store_true"},
+        }
+        if name == "doctor":
+            options["--json"] = {"action": "store_true"}
+        if name in {"web", "serve"}:
+            options.update({"--host": {}, "--port": {"type": int}, "--model-id": {}})
+        if name == "web":
+            options["--no-browser"] = {"action": "store_true"}
+        omitted = config.get("omit", {}).get(name, [])
+        for option, kwargs in options.items():
+            if option not in omitted:
+                kwargs.update(config.get("alter", {}).get(name, {}).get(option, {}))
+                command.add_argument(option, **kwargs)
+        for option in config.get("required", {}).get(name, []):
+            command.add_argument(option, required=True)
+        for positional in config.get("positionals", {}).get(name, []):
+            command.add_argument(positional)
+    args = parser.parse_args()
+    if args.command == "doctor":
         return _doctor()
-    if "serve" in sys.argv or "web" in sys.argv:
+    if args.command in {"serve", "web"}:
         family = resolve_model(_argument("--model")).descriptor
         print(json.dumps(_runtime_settings(family)))
     return 0
